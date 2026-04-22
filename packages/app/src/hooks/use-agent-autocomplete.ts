@@ -7,10 +7,17 @@ import { useAutocomplete } from "./use-autocomplete";
 import { useSessionStore } from "@/stores/session-store";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import {
+  filterImportableSessionsForWorkspace,
+  getImportableSessionProviderLabel,
+  groupImportableSessionsByProvider,
+  sortImportableSessions,
+} from "@/hooks/importable-sessions-utils";
+import {
   applyFileMentionReplacement,
   findActiveFileMention,
   type FileMentionRange,
 } from "@/utils/file-mention-autocomplete";
+import type { ImportableSessionEntry } from "@server/client/daemon-client";
 
 interface UseAgentAutocompleteInput {
   userInput: string;
@@ -24,6 +31,10 @@ interface UseAgentAutocompleteInput {
 
 type AgentAutocompleteOption =
   | (AutocompleteOption & { type: "command" })
+  | (AutocompleteOption & {
+      type: "importable_session";
+      session: ImportableSessionEntry;
+    })
   | (AutocompleteOption & {
       type: "workspace_entry";
       entryPath: string;
@@ -46,6 +57,9 @@ interface DirectorySuggestionEntry {
   path: string;
   kind: "file" | "directory";
 }
+
+const RESUME_COMMAND_NAME = "resume";
+const RESUME_COMMAND_DESCRIPTION = "Resume an existing provider session";
 
 function normalizeDraftCommandConfig(
   draftConfig?: DraftCommandConfig,
@@ -107,8 +121,12 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     onAutocompleteApplied,
   } = input;
 
-  const showCommandAutocomplete = userInput.startsWith("/") && !userInput.includes(" ");
+  const resumeCommandMatch = userInput.match(/^\/resume(?:\s+(.*))?$/);
+  const showImportableSessionAutocomplete = Boolean(resumeCommandMatch);
+  const showCommandAutocomplete =
+    userInput.startsWith("/") && !userInput.includes(" ") && !showImportableSessionAutocomplete;
   const commandFilterQuery = showCommandAutocomplete ? userInput.slice(1) : "";
+  const importableSessionQuery = resumeCommandMatch?.[1]?.trim().toLowerCase() ?? "";
 
   const activeFileMention = useMemo(
     () =>
@@ -143,14 +161,18 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
 
-  const mode: "command" | "file" | null = showFileAutocomplete
+  const mode: "command" | "file" | "importable_session" | null = showFileAutocomplete
     ? "file"
+    : showImportableSessionAutocomplete
+      ? "importable_session"
     : showCommandAutocomplete
       ? "command"
       : null;
   const isVisible =
     mode === "command"
       ? canLoadCommands
+      : mode === "importable_session"
+        ? Boolean(serverId) && Boolean(client) && autocompleteCwd.length > 0
       : mode === "file"
         ? Boolean(serverId) && autocompleteCwd.length > 0
         : false;
@@ -196,6 +218,22 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     placeholderData: keepPreviousData,
   });
 
+  const importableSessionsQuery = useQuery({
+    queryKey: ["importableSessionsAutocomplete", serverId, autocompleteCwd],
+    queryFn: async (): Promise<ImportableSessionEntry[]> => {
+      if (!client) {
+        throw new Error("Daemon client unavailable");
+      }
+      const response = await client.listImportableSessions({
+        limit: 100,
+      });
+      return sortImportableSessions(response.entries);
+    },
+    enabled: mode === "importable_session" && Boolean(client) && autocompleteCwd.length > 0,
+    retry: false,
+    staleTime: 15_000,
+  });
+
   const options = useMemo<AgentAutocompleteOption[]>(() => {
     if (!isVisible) {
       return [];
@@ -203,7 +241,21 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
 
     if (mode === "command") {
       const filterLower = commandFilterQuery.toLowerCase();
-      const matches = commands.filter((cmd) => cmd.name.toLowerCase().includes(filterLower));
+      const syntheticResumeCommand = RESUME_COMMAND_NAME.includes(filterLower)
+        ? [
+            {
+              name: RESUME_COMMAND_NAME,
+              description: RESUME_COMMAND_DESCRIPTION,
+              argumentHint: "provider-session-id",
+            },
+          ]
+        : [];
+      const matches = [...syntheticResumeCommand, ...commands].filter((cmd, index, all) => {
+        if (!cmd.name.toLowerCase().includes(filterLower)) {
+          return false;
+        }
+        return all.findIndex((candidate) => candidate.name === cmd.name) === index;
+      });
       const orderedMatches = orderAutocompleteOptions(matches);
       return orderedMatches.map((cmd) => ({
         type: "command" as const,
@@ -212,6 +264,47 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
         detail: cmd.argumentHint || undefined,
         description: cmd.description,
         kind: "command",
+      }));
+    }
+
+    if (mode === "importable_session") {
+      const matches = filterImportableSessionsForWorkspace(
+        importableSessionsQuery.data ?? [],
+        autocompleteCwd,
+      ).filter((entry) => {
+        if (!importableSessionQuery) {
+          return true;
+        }
+        const haystack = [
+          getImportableSessionProviderLabel(entry.provider),
+          entry.sessionId,
+          entry.title ?? "",
+          entry.cwd,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(importableSessionQuery);
+      });
+      const groupedMatches = groupImportableSessionsByProvider(matches);
+      const orderedMatches = orderAutocompleteOptions(
+        groupedMatches.flatMap((group) =>
+          group.entries.map((entry) => ({
+            type: "importable_session" as const,
+            id: `${entry.provider}:${entry.sessionId}`,
+            label: entry.title || entry.sessionId,
+            detail: shortenAutocompletePath(entry.cwd),
+            description: entry.sessionId,
+            kind: "command" as const,
+            session: entry,
+          })),
+        ),
+      );
+      return orderedMatches.map((option, index, all) => ({
+        ...option,
+        groupLabel:
+          index === 0 || all[index - 1]?.session.provider !== option.session.provider
+            ? getImportableSessionProviderLabel(option.session.provider)
+            : undefined,
       }));
     }
 
@@ -228,13 +321,29 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     }
 
     return [];
-  }, [activeFileMention, commandFilterQuery, commands, fileSuggestionsQuery.data, isVisible, mode]);
+  }, [
+    activeFileMention,
+    autocompleteCwd,
+    commandFilterQuery,
+    commands,
+    fileSuggestionsQuery.data,
+    importableSessionQuery,
+    importableSessionsQuery.data,
+    isVisible,
+    mode,
+  ]);
 
   const onSelectOption = useCallback(
     (option: AutocompleteOption) => {
       const selected = option as AgentAutocompleteOption;
       if (selected.type === "command") {
         setUserInput(`/${selected.id} `);
+        onAutocompleteApplied?.();
+        return;
+      }
+
+      if (selected.type === "importable_session") {
+        setUserInput(`/${RESUME_COMMAND_NAME} ${selected.session.sessionId}`);
         onAutocompleteApplied?.();
         return;
       }
@@ -261,22 +370,38 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
   const isLoading =
     mode === "command"
       ? isCommandsLoading
-      : mode === "file"
-        ? fileSuggestionsQuery.isPending || (fileSuggestionsQuery.isLoading && options.length === 0)
-        : false;
+      : mode === "importable_session"
+        ? importableSessionsQuery.isPending
+        : mode === "file"
+          ? fileSuggestionsQuery.isPending || (fileSuggestionsQuery.isLoading && options.length === 0)
+          : false;
   const errorMessage =
     mode === "command"
       ? isError
         ? (error?.message ?? "Failed to load")
         : undefined
+      : mode === "importable_session"
+        ? importableSessionsQuery.error instanceof Error
+          ? importableSessionsQuery.error.message
+          : undefined
       : mode === "file"
         ? fileSuggestionsQuery.error instanceof Error
           ? fileSuggestionsQuery.error.message
           : undefined
         : undefined;
 
-  const loadingText = mode === "file" ? "Searching workspace..." : "Loading commands...";
-  const emptyText = mode === "file" ? "No files or directories found" : "No commands found";
+  const loadingText =
+    mode === "file"
+      ? "Searching workspace..."
+      : mode === "importable_session"
+        ? "Loading resumable sessions..."
+        : "Loading commands...";
+  const emptyText =
+    mode === "file"
+      ? "No files or directories found"
+      : mode === "importable_session"
+        ? "No resumable sessions found"
+        : "No commands found";
 
   return {
     isVisible,
@@ -289,4 +414,12 @@ export function useAgentAutocomplete(input: UseAgentAutocompleteInput): AgentAut
     onSelectOption,
     onKeyPress,
   };
+}
+
+function shortenAutocompletePath(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed.length <= 48) {
+    return trimmed;
+  }
+  return `...${trimmed.slice(trimmed.length - 45)}`;
 }

@@ -11,6 +11,7 @@ export interface AutocompleteOption {
   detail?: string;
   description?: string;
   kind?: "command" | "file" | "directory";
+  groupLabel?: string;
 }
 
 interface AutocompleteProps {
@@ -186,49 +187,55 @@ export function Autocomplete({
             const optionDescription = removeBoltGlyphs(option.description);
             const isFileOrDir = option.kind === "directory" || option.kind === "file";
             return (
-              <Pressable
-                key={option.id}
-                onLayout={(event) => handleRowLayout(index, event)}
-                onPress={() => onSelect(option)}
-                style={({ hovered = false, pressed }) => [
-                  styles.item,
-                  (hovered || pressed || isSelected) && styles.itemActive,
-                ]}
-              >
-                {isFileOrDir ? (
-                  <>
-                    <View style={styles.itemLeading}>
-                      {option.kind === "directory" ? (
-                        <Folder size={14} color={theme.colors.foregroundMuted} />
-                      ) : (
-                        <File size={14} color={theme.colors.foregroundMuted} />
-                      )}
-                    </View>
-                    <View style={styles.itemMain}>
-                      <View style={styles.itemHeader}>
-                        <Text style={styles.itemLabel}>{optionLabel}</Text>
-                        {removeBoltGlyphs(option.detail) ? (
-                          <Text style={styles.itemDetail}>{removeBoltGlyphs(option.detail)}</Text>
+              <View key={option.id}>
+                {option.groupLabel ? (
+                  <View style={styles.groupHeader}>
+                    <Text style={styles.groupHeaderText}>{option.groupLabel}</Text>
+                  </View>
+                ) : null}
+                <Pressable
+                  onLayout={(event) => handleRowLayout(index, event)}
+                  onPress={() => onSelect(option)}
+                  style={({ hovered = false, pressed }) => [
+                    styles.item,
+                    (hovered || pressed || isSelected) && styles.itemActive,
+                  ]}
+                >
+                  {isFileOrDir ? (
+                    <>
+                      <View style={styles.itemLeading}>
+                        {option.kind === "directory" ? (
+                          <Folder size={14} color={theme.colors.foregroundMuted} />
+                        ) : (
+                          <File size={14} color={theme.colors.foregroundMuted} />
+                        )}
+                      </View>
+                      <View style={styles.itemMain}>
+                        <View style={styles.itemHeader}>
+                          <Text style={styles.itemLabel}>{optionLabel}</Text>
+                          {removeBoltGlyphs(option.detail) ? (
+                            <Text style={styles.itemDetail}>{removeBoltGlyphs(option.detail)}</Text>
+                          ) : null}
+                        </View>
+                        {optionDescription ? (
+                          <Text style={styles.itemDescription} numberOfLines={1}>
+                            {optionDescription}
+                          </Text>
                         ) : null}
                       </View>
+                    </>
+                  ) : (
+                    <View style={styles.itemMainRow}>
+                      <Text style={styles.itemLabel}>{optionLabel}</Text>
                       {optionDescription ? (
-                        <Text style={styles.itemDescription} numberOfLines={1}>
+                        <Text style={styles.itemDescriptionInline} numberOfLines={1}>
                           {optionDescription}
                         </Text>
                       ) : null}
                     </View>
-                  </>
-                ) : (
-                  <View style={styles.itemMainRow}>
-                    <Text style={styles.itemLabel}>{optionLabel}</Text>
-                    {optionDescription ? (
-                      <Text style={styles.itemDescriptionInline} numberOfLines={1}>
-                        {optionDescription}
-                      </Text>
-                    ) : null}
-                  </View>
-                )}
-              </Pressable>
+                  )}
+                </Pressable>
+              </View>
             );
           })}
         </ScrollView>
@@ -279,6 +286,18 @@ const styles = StyleSheet.create(((theme: Theme) => ({
   },
   scrollContent: {
     paddingVertical: theme.spacing[1],
+  },
+  groupHeader: {
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[1],
+  },
+  groupHeaderText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.medium,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
   item: {
     flexDirection: "row",

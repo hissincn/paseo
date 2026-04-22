@@ -782,6 +782,65 @@ export class AgentManager {
     return this.registerSession(session, normalizedConfig, resolvedAgentId, options);
   }
 
+  async replaceAgentFromPersistence(
+    agentId: string,
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+  ): Promise<ManagedAgent> {
+    let existing = this.requireAgent(agentId);
+    if (this.hasInFlightRun(agentId)) {
+      await this.cancelAgentRun(agentId);
+      existing = this.requireAgent(agentId);
+    }
+
+    const metadata = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
+    const mergedConfig = {
+      ...existing.config,
+      ...metadata,
+      ...overrides,
+      provider: handle.provider,
+    } as AgentSessionConfig;
+    const normalizedConfig = await this.normalizeConfig(mergedConfig);
+    const resumeOverrides =
+      normalizedConfig.model !== mergedConfig.model
+        ? { ...overrides, model: normalizedConfig.model }
+        : overrides;
+    const launchContext = this.buildLaunchContext(agentId);
+    const client = this.requireClient(handle.provider);
+    const session = await client.resumeSession(handle, resumeOverrides, launchContext);
+
+    this.agents.delete(agentId);
+    if (existing.unsubscribeSession) {
+      existing.unsubscribeSession();
+      existing.unsubscribeSession = null;
+    }
+    for (const waiter of existing.foregroundTurnWaiters) {
+      this.settleForegroundTurnWaiter(waiter);
+    }
+    existing.foregroundTurnWaiters.clear();
+    this.settlePendingForegroundRun(agentId);
+    try {
+      await existing.session.close();
+    } catch (error) {
+      this.logger.warn(
+        { err: error, agentId },
+        "Failed to close previous session during persistence replacement",
+      );
+    }
+
+    return this.registerSession(session, normalizedConfig, agentId, {
+      labels: existing.labels,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+      lastUserMessageAt: null,
+      timeline: [],
+      timelineRows: [],
+      timelineNextSeq: 1,
+      historyPrimed: false,
+      attention: { requiresAttention: false },
+    });
+  }
+
   // Hot-reload an active agent session with config overrides while preserving
   // in-memory timeline state.
   async reloadAgentSession(

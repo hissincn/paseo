@@ -84,7 +84,7 @@ const AgentSelectOptionSchema = z.object({
   label: z.string(),
   description: z.string().optional(),
   isDefault: z.boolean().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const AgentFeatureToggleSchema = z.object({
@@ -119,7 +119,7 @@ const AgentModelDefinitionSchema: z.ZodType<AgentModelDefinition> = z.object({
   label: z.string(),
   description: z.string().optional(),
   isDefault: z.boolean().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   thinkingOptions: z.array(AgentSelectOptionSchema).optional(),
   defaultThinkingOptionId: z.string().optional(),
 });
@@ -155,19 +155,19 @@ const McpStdioServerConfigSchema = z.object({
   type: z.literal("stdio"),
   command: z.string(),
   args: z.array(z.string()).optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 const McpHttpServerConfigSchema = z.object({
   type: z.literal("http"),
   url: z.string(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
 });
 
 const McpSseServerConfigSchema = z.object({
   type: z.literal("sse"),
   url: z.string(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
 });
 
 const McpServerConfigSchema = z.discriminatedUnion("type", [
@@ -182,7 +182,7 @@ const AgentSessionConfigSchema = z.object({
   modeId: z.string().optional(),
   model: z.string().optional(),
   thinkingOptionId: z.string().optional(),
-  featureValues: z.record(z.unknown()).optional(),
+  featureValues: z.record(z.string(), z.unknown()).optional(),
   title: z.string().trim().min(1).max(MAX_EXPLICIT_AGENT_TITLE_CHARS).optional().nullable(),
   approvalPolicy: z.string().optional(),
   sandboxMode: z.string().optional(),
@@ -190,16 +190,16 @@ const AgentSessionConfigSchema = z.object({
   webSearch: z.boolean().optional(),
   extra: z
     .object({
-      codex: z.record(z.unknown()).optional(),
-      claude: z.record(z.unknown()).optional(),
+      codex: z.record(z.string(), z.unknown()).optional(),
+      claude: z.record(z.string(), z.unknown()).optional(),
     })
     .partial()
     .optional(),
   systemPrompt: z.string().optional(),
-  mcpServers: z.record(McpServerConfigSchema).optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
 });
 
-const AgentPermissionUpdateSchema = z.record(z.unknown());
+const AgentPermissionUpdateSchema = z.record(z.string(), z.unknown());
 const AgentPermissionActionSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -212,7 +212,7 @@ export const AgentPermissionResponseSchema: z.ZodType<AgentPermissionResponse> =
   z.object({
     behavior: z.literal("allow"),
     selectedActionId: z.string().optional(),
-    updatedInput: z.record(z.unknown()).optional(),
+    updatedInput: z.record(z.string(), z.unknown()).optional(),
     updatedPermissions: z.array(AgentPermissionUpdateSchema).optional(),
   }),
   z.object({
@@ -230,10 +230,10 @@ export const AgentPermissionRequestPayloadSchema: z.ZodType<AgentPermissionReque
   kind: z.enum(["tool", "plan", "question", "mode", "other"]),
   title: z.string().optional(),
   description: z.string().optional(),
-  input: z.record(z.unknown()).optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
   suggestions: z.array(AgentPermissionUpdateSchema).optional(),
   actions: z.array(AgentPermissionActionSchema).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const UnknownValueSchema = z.union([
@@ -365,7 +365,7 @@ const ToolCallBasePayloadSchema = z
     callId: z.string(),
     name: z.string(),
     detail: ToolCallDetailPayloadSchema,
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
@@ -389,16 +389,14 @@ const ToolCallCanceledPayloadSchema = ToolCallBasePayloadSchema.extend({
   error: z.null(),
 });
 
-const ToolCallTimelineItemPayloadSchema: z.ZodType<ToolCallTimelineItem, z.ZodTypeDef, unknown> =
-  z.union([
-    ToolCallRunningPayloadSchema,
-    ToolCallCompletedPayloadSchema,
-    ToolCallFailedPayloadSchema,
-    ToolCallCanceledPayloadSchema,
-  ]);
+const ToolCallTimelineItemPayloadSchema: z.ZodType<ToolCallTimelineItem> = z.union([
+  ToolCallRunningPayloadSchema,
+  ToolCallCompletedPayloadSchema,
+  ToolCallFailedPayloadSchema,
+  ToolCallCanceledPayloadSchema,
+]);
 
-export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, z.ZodTypeDef, unknown> =
-  z.union([
+export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem> = z.union([
     z.object({
       type: z.literal("user_message"),
       text: z.string(),
@@ -502,9 +500,16 @@ const AgentPersistenceHandleSchema: z.ZodType<AgentPersistenceHandle | null> = z
     provider: AgentProviderSchema,
     sessionId: z.string(),
     nativeHandle: z.string().optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .nullable();
+
+const AgentPersistenceHandleRequiredSchema = z.object({
+  provider: AgentProviderSchema,
+  sessionId: z.string(),
+  nativeHandle: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 const AgentRuntimeInfoSchema: z.ZodType<AgentRuntimeInfo> = z.object({
   provider: AgentProviderSchema,
@@ -512,7 +517,7 @@ const AgentRuntimeInfoSchema: z.ZodType<AgentRuntimeInfo> = z.object({
   model: z.string().nullable().optional(),
   thinkingOptionId: z.string().nullable().optional(),
   modeId: z.string().nullable().optional(),
-  extra: z.record(z.unknown()).optional(),
+  extra: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const AgentSnapshotPayloadSchema = z.object({
@@ -536,7 +541,7 @@ export const AgentSnapshotPayloadSchema = z.object({
   lastUsage: AgentUsageSchema.optional(),
   lastError: z.string().optional(),
   title: z.string().nullable(),
-  labels: z.record(z.string()).default({}),
+  labels: z.record(z.string(), z.string()).default({}),
   requiresAttention: z.boolean().optional(),
   attentionReason: z.enum(["finished", "error", "permission"]).nullable().optional(),
   attentionTimestamp: z.string().nullable().optional(),
@@ -544,6 +549,18 @@ export const AgentSnapshotPayloadSchema = z.object({
 });
 
 export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;
+
+export const ImportableSessionDescriptorSchema = z.object({
+  provider: AgentProviderSchema,
+  sessionId: z.string(),
+  cwd: z.string(),
+  title: z.string().nullable(),
+  lastActivityAt: z.string(),
+  persistence: AgentPersistenceHandleRequiredSchema,
+  timeline: z.array(AgentTimelineItemPayloadSchema).optional(),
+});
+
+export type ImportableSessionDescriptor = z.infer<typeof ImportableSessionDescriptorSchema>;
 
 export type AgentStreamEventPayload = z.infer<typeof AgentStreamEventPayloadSchema>;
 
@@ -568,7 +585,7 @@ export const AudioPlayedMessageSchema = z.object({
 });
 
 const AgentDirectoryFilterSchema = z.object({
-  labels: z.record(z.string()).optional(),
+  labels: z.record(z.string(), z.string()).optional(),
   projectKeys: z.array(z.string()).optional(),
   statuses: z.array(AgentStatusSchema).optional(),
   includeArchived: z.boolean().optional(),
@@ -599,7 +616,7 @@ export const UpdateAgentRequestMessageSchema = z.object({
   type: z.literal("update_agent_request"),
   agentId: z.string(),
   name: z.string().optional(),
-  labels: z.record(z.string()).optional(),
+  labels: z.record(z.string(), z.string()).optional(),
   requestId: z.string(),
 });
 
@@ -700,6 +717,13 @@ export const FetchAgentRequestMessageSchema = z.object({
   agentId: z.string(),
 });
 
+export const ListImportableSessionsRequestMessageSchema = z.object({
+  type: z.literal("list_importable_sessions_request"),
+  requestId: z.string(),
+  provider: AgentProviderSchema.optional(),
+  limit: z.number().int().positive().max(200).optional(),
+});
+
 export const SendAgentMessageRequestSchema = z.object({
   type: z.literal("send_agent_message_request"),
   requestId: z.string(),
@@ -770,7 +794,7 @@ export const CreateAgentRequestMessageSchema = z.object({
   worktreeName: z.string().optional(),
   initialPrompt: z.string().optional(),
   clientMessageId: z.string().optional(),
-  outputSchema: z.record(z.unknown()).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
   images: z
     .array(
       z.object({
@@ -780,7 +804,7 @@ export const CreateAgentRequestMessageSchema = z.object({
     )
     .optional(),
   git: GitSetupOptionsSchema.optional(),
-  labels: z.record(z.string()).default({}),
+  labels: z.record(z.string(), z.string()).default({}),
   requestId: z.string(),
 });
 
@@ -826,6 +850,14 @@ export const ResumeAgentRequestMessageSchema = z.object({
   handle: AgentPersistenceHandleSchema,
   overrides: AgentSessionConfigSchema.partial().optional(),
   requestId: z.string(),
+});
+
+export const ImportImportableSessionRequestMessageSchema = z.object({
+  type: z.literal("import_importable_session_request"),
+  requestId: z.string(),
+  handle: AgentPersistenceHandleRequiredSchema,
+  title: z.string().nullable().optional(),
+  targetAgentId: z.string().optional(),
 });
 
 export const RefreshAgentRequestMessageSchema = z.object({
@@ -1291,7 +1323,7 @@ const ListCommandsDraftConfigSchema = z.object({
   modeId: z.string().optional(),
   model: z.string().optional(),
   thinkingOptionId: z.string().optional(),
-  featureValues: z.record(z.unknown()).optional(),
+  featureValues: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const ListProviderFeaturesRequestMessageSchema = z.object({
@@ -1390,6 +1422,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FetchAgentsRequestMessageSchema,
   FetchWorkspacesRequestMessageSchema,
   FetchAgentRequestMessageSchema,
+  ListImportableSessionsRequestMessageSchema,
   DeleteAgentRequestMessageSchema,
   ArchiveAgentRequestMessageSchema,
   CloseItemsRequestMessageSchema,
@@ -1410,6 +1443,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
+  ImportImportableSessionRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
   CancelAgentRequestMessageSchema,
   ShutdownServerRequestMessageSchema,
@@ -1493,7 +1527,7 @@ export const ActivityLogPayloadSchema = z.object({
   timestamp: z.coerce.date(),
   type: z.enum(["transcript", "assistant", "tool_call", "tool_result", "error", "system"]),
   content: z.string(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const ActivityLogMessageSchema = z.object({
@@ -1892,6 +1926,14 @@ export const FetchAgentsResponseMessageSchema = z.object({
   }),
 });
 
+export const ListImportableSessionsResponseMessageSchema = z.object({
+  type: z.literal("list_importable_sessions_response"),
+  payload: z.object({
+    requestId: z.string(),
+    entries: z.array(ImportableSessionDescriptorSchema),
+  }),
+});
+
 export const FetchWorkspacesResponseMessageSchema = z.object({
   type: z.literal("fetch_workspaces_response"),
   payload: z.object({
@@ -1963,6 +2005,14 @@ export const FetchAgentResponseMessageSchema = z.object({
     agent: AgentSnapshotPayloadSchema.nullable(),
     project: ProjectPlacementPayloadSchema.nullable().optional(),
     error: z.string().nullable(),
+  }),
+});
+
+export const ImportImportableSessionResponseMessageSchema = z.object({
+  type: z.literal("import_importable_session_response"),
+  payload: z.object({
+    requestId: z.string(),
+    agent: AgentSnapshotPayloadSchema,
   }),
 });
 
@@ -2649,12 +2699,14 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentStreamMessageSchema,
   AgentStatusMessageSchema,
   FetchAgentsResponseMessageSchema,
+  ListImportableSessionsResponseMessageSchema,
   FetchWorkspacesResponseMessageSchema,
   OpenProjectResponseMessageSchema,
   ListAvailableEditorsResponseMessageSchema,
   OpenInEditorResponseMessageSchema,
   ArchiveWorkspaceResponseMessageSchema,
   FetchAgentResponseMessageSchema,
+  ImportImportableSessionResponseMessageSchema,
   FetchAgentTimelineResponseMessageSchema,
   SendAgentMessageResponseMessageSchema,
   SetVoiceModeResponseMessageSchema,
@@ -2748,6 +2800,12 @@ export type AgentStreamMessage = z.infer<typeof AgentStreamMessageSchema>;
 export type AgentStatusMessage = z.infer<typeof AgentStatusMessageSchema>;
 export type ProjectCheckoutLitePayload = z.infer<typeof ProjectCheckoutLitePayloadSchema>;
 export type ProjectPlacementPayload = z.infer<typeof ProjectPlacementPayloadSchema>;
+export type ListImportableSessionsResponseMessage = z.infer<
+  typeof ListImportableSessionsResponseMessageSchema
+>;
+export type ImportImportableSessionResponseMessage = z.infer<
+  typeof ImportImportableSessionResponseMessageSchema
+>;
 export type WorkspaceStateBucket = z.infer<typeof WorkspaceStateBucketSchema>;
 export type WorkspaceDescriptorPayload = z.infer<typeof WorkspaceDescriptorPayloadSchema>;
 export type KnownEditorTargetId = z.infer<typeof KnownEditorTargetIdSchema>;

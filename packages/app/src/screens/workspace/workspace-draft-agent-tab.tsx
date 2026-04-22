@@ -353,6 +353,7 @@ export function WorkspaceDraftAgentTab({
             autoFocus={shouldAutoFocusWorkspaceDraftComposer({ isPaneFocused, isSubmitting })}
             onAddImages={handleAddImagesCallback}
             onFocusInput={handleFocusInputCallback}
+            onResumeImported={onCreated}
             commandDraftConfig={draftCommandConfig}
             statusControls={{
               providerDefinitions,

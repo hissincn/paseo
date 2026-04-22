@@ -11,6 +11,7 @@ import {
   isLegacyEditorTargetId,
   serializeAgentStreamEvent,
   type AgentSnapshotPayload,
+  type ImportableSessionDescriptor,
   type SessionInboundMessage,
   type SessionOutboundMessage,
   type FileExplorerRequest,
@@ -107,6 +108,7 @@ import type {
   AgentStreamEvent,
   AgentProvider,
   AgentPersistenceHandle,
+  PersistedAgentDescriptor,
   ProviderSnapshotEntry,
 } from "./agent/agent-sdk-types.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
@@ -547,6 +549,18 @@ function toAgentPersistenceHandle(
     nativeHandle: handle.nativeHandle,
     metadata: handle.metadata,
   } satisfies AgentPersistenceHandle;
+}
+
+function buildPersistenceLookupKey(input: {
+  provider: string;
+  sessionId: string | null | undefined;
+}): string | null {
+  const provider = input.provider.trim();
+  const sessionId = input.sessionId?.trim();
+  if (!provider || !sessionId) {
+    return null;
+  }
+  return `${provider}:${sessionId}`;
 }
 
 /**
@@ -1594,6 +1608,10 @@ export class Session {
           await this.handleFetchAgent(msg.agentId, msg.requestId);
           break;
 
+        case "list_importable_sessions_request":
+          await this.handleListImportableSessionsRequest(msg);
+          break;
+
         case "delete_agent_request":
           await this.handleDeleteAgentRequest(msg.agentId, msg.requestId);
           break;
@@ -1665,6 +1683,10 @@ export class Session {
 
         case "resume_agent_request":
           await this.handleResumeAgentRequest(msg);
+          break;
+
+        case "import_importable_session_request":
+          await this.handleImportImportableSessionRequest(msg);
           break;
 
         case "refresh_agent_request":
@@ -5188,6 +5210,90 @@ export class Session {
     return this.buildStoredAgentPayload(record);
   }
 
+  private buildImportableSessionDescriptor(
+    descriptor: PersistedAgentDescriptor,
+  ): ImportableSessionDescriptor {
+    return {
+      provider: descriptor.provider,
+      sessionId: descriptor.sessionId,
+      cwd: descriptor.cwd,
+      title: descriptor.title,
+      lastActivityAt: descriptor.lastActivityAt.toISOString(),
+      persistence: descriptor.persistence,
+      ...(descriptor.timeline.length > 0 ? { timeline: descriptor.timeline } : {}),
+    };
+  }
+
+  private async collectImportedPersistenceKeys(): Promise<Set<string>> {
+    const keys = new Set<string>();
+
+    for (const agent of this.agentManager.listAgents()) {
+      const key = buildPersistenceLookupKey({
+        provider: agent.provider,
+        sessionId: agent.persistence?.sessionId,
+      });
+      if (key) {
+        keys.add(key);
+      }
+    }
+
+    const records = await this.agentStorage.list();
+    for (const record of records) {
+      if (record.internal) {
+        continue;
+      }
+      const key = buildPersistenceLookupKey({
+        provider: record.provider,
+        sessionId: record.persistence?.sessionId,
+      });
+      if (key) {
+        keys.add(key);
+      }
+    }
+
+    return keys;
+  }
+
+  private findLiveAgentIdByHandle(handle: AgentPersistenceHandle): string | null {
+    const target = buildPersistenceLookupKey(handle);
+    if (!target) {
+      return null;
+    }
+    for (const agent of this.agentManager.listAgents()) {
+      const key = buildPersistenceLookupKey({
+        provider: agent.provider,
+        sessionId: agent.persistence?.sessionId,
+      });
+      if (key === target) {
+        return agent.id;
+      }
+    }
+    return null;
+  }
+
+  private async findStoredAgentRecordByHandle(
+    handle: AgentPersistenceHandle,
+  ): Promise<StoredAgentRecord | null> {
+    const target = buildPersistenceLookupKey(handle);
+    if (!target) {
+      return null;
+    }
+    const records = await this.agentStorage.list();
+    for (const record of records) {
+      if (record.internal) {
+        continue;
+      }
+      const key = buildPersistenceLookupKey({
+        provider: record.provider,
+        sessionId: record.persistence?.sessionId,
+      });
+      if (key === target) {
+        return record;
+      }
+    }
+    return null;
+  }
+
   private normalizeFetchAgentsSort(
     sort: FetchAgentsRequestSort[] | undefined,
   ): FetchAgentsRequestSort[] {
@@ -6465,6 +6571,149 @@ export class Session {
       type: "fetch_agent_response",
       payload: { requestId, agent, project, error: null },
     });
+  }
+
+  private async handleListImportableSessionsRequest(
+    request: Extract<SessionInboundMessage, { type: "list_importable_sessions_request" }>,
+  ): Promise<void> {
+    try {
+      const limit = request.limit ?? 50;
+      const fetchLimit = Math.min(limit * 3, 200);
+      const importedKeys = await this.collectImportedPersistenceKeys();
+      const descriptors = await this.agentManager.listPersistedAgents({
+        ...(request.provider ? { provider: request.provider } : {}),
+        limit: fetchLimit,
+      });
+      const entries = descriptors
+        .filter((descriptor) => {
+          const key = buildPersistenceLookupKey(descriptor);
+          return key ? !importedKeys.has(key) : false;
+        })
+        .sort((left, right) => right.lastActivityAt.getTime() - left.lastActivityAt.getTime())
+        .slice(0, limit)
+        .map((descriptor) => this.buildImportableSessionDescriptor(descriptor));
+
+      this.emit({
+        type: "list_importable_sessions_response",
+        payload: {
+          requestId: request.requestId,
+          entries,
+        },
+      });
+    } catch (error) {
+      const code = error instanceof SessionRequestError ? error.code : "list_importable_sessions_failed";
+      const message = error instanceof Error ? error.message : "Failed to list importable sessions";
+      this.sessionLogger.error({ err: error }, "Failed to handle list_importable_sessions_request");
+      this.emit({
+        type: "rpc_error",
+        payload: {
+          requestId: request.requestId,
+          requestType: request.type,
+          error: message,
+          code,
+        },
+      });
+    }
+  }
+
+  private async handleImportImportableSessionRequest(
+    request: Extract<SessionInboundMessage, { type: "import_importable_session_request" }>,
+  ): Promise<void> {
+    const normalizedTitle = request.title?.trim() || null;
+
+    try {
+      await this.unarchiveAgentByHandle(request.handle);
+
+      const liveAgentId = this.findLiveAgentIdByHandle(request.handle);
+      if (liveAgentId) {
+        const agent = await this.getAgentPayloadById(liveAgentId);
+        if (!agent) {
+          throw new Error(`Agent ${liveAgentId} not found after live import match`);
+        }
+        this.emit({
+          type: "import_importable_session_response",
+          payload: {
+            requestId: request.requestId,
+            agent,
+          },
+        });
+        return;
+      }
+
+      const existingRecord = await this.findStoredAgentRecordByHandle(request.handle);
+      if (existingRecord) {
+        await this.unarchiveAgentState(existingRecord.id);
+        if (normalizedTitle && existingRecord.title !== normalizedTitle) {
+          await this.agentStorage.setTitle(existingRecord.id, normalizedTitle);
+          this.agentManager.notifyAgentState(existingRecord.id);
+        }
+        const agent = await this.getAgentPayloadById(existingRecord.id);
+        if (!agent) {
+          throw new Error(`Agent ${existingRecord.id} not found after stored import match`);
+        }
+        this.emit({
+          type: "import_importable_session_response",
+          payload: {
+            requestId: request.requestId,
+            agent,
+          },
+        });
+        return;
+      }
+
+      const targetAgentId = request.targetAgentId?.trim() || null;
+      const shouldReuseTargetAgent =
+        targetAgentId !== null && this.isSafeToReplaceAgentWithImportedSession(targetAgentId);
+
+      const snapshot = shouldReuseTargetAgent
+        ? await this.agentManager.replaceAgentFromPersistence(targetAgentId, request.handle)
+        : await this.agentManager.resumeAgentFromPersistence(request.handle);
+      await this.unarchiveAgentState(snapshot.id);
+      await this.agentManager.hydrateTimelineFromProvider(snapshot.id);
+      if (normalizedTitle) {
+        await this.agentStorage.setTitle(snapshot.id, normalizedTitle);
+      }
+      await this.forwardAgentUpdate(this.agentManager.getAgent(snapshot.id) ?? snapshot);
+      const agent = await this.getAgentPayloadById(snapshot.id);
+      if (!agent) {
+        throw new Error(`Agent ${snapshot.id} not found after import`);
+      }
+      this.emit({
+        type: "import_importable_session_response",
+        payload: {
+          requestId: request.requestId,
+          agent,
+        },
+      });
+    } catch (error) {
+      const code = error instanceof SessionRequestError ? error.code : "import_importable_session_failed";
+      const message = error instanceof Error ? error.message : "Failed to import session";
+      this.sessionLogger.error({ err: error }, "Failed to handle import_importable_session_request");
+      this.emit({
+        type: "rpc_error",
+        payload: {
+          requestId: request.requestId,
+          requestType: request.type,
+          error: message,
+          code,
+        },
+      });
+    }
+  }
+
+  private isSafeToReplaceAgentWithImportedSession(agentId: string): boolean {
+    const normalizedAgentId = agentId.trim();
+    if (!normalizedAgentId) {
+      return false;
+    }
+    const agent = this.agentManager.getAgent(normalizedAgentId);
+    if (!agent) {
+      return false;
+    }
+    if (agent.lastUserMessageAt) {
+      return false;
+    }
+    return this.agentManager.getTimeline(normalizedAgentId).length === 0;
   }
 
   private async handleFetchAgentTimelineRequest(

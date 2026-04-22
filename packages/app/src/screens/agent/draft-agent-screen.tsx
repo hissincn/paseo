@@ -291,6 +291,24 @@ function DraftAgentScreenContent({
     addImagesRef.current?.(files);
   }, []);
 
+  const handleResumeImportedSession = useCallback(
+    async (agent: { id: string; cwd: string; archivedAt?: string | null }) => {
+      if (!selectedServerId) {
+        return;
+      }
+      draftInput.clear("abandoned");
+      router.navigate(
+        prepareWorkspaceTab({
+          serverId: selectedServerId,
+          workspaceId: agent.cwd,
+          target: { kind: "agent", agentId: agent.id },
+          pin: Boolean(agent.archivedAt),
+        }),
+      );
+    },
+    [draftInput, router, selectedServerId],
+  );
+
   const handleAddImagesCallback = useCallback((addImages: (images: ImageAttachment[]) => void) => {
     addImagesRef.current = addImages;
   }, []);
@@ -1028,25 +1046,27 @@ function DraftAgentScreenContent({
             ]}
           >
             <View style={styles.menuToggleRow}>
-              <SidebarMenuToggle />
-              {!isMobile && canOpenExplorer ? (
-                <HeaderToggleButton
-                  onPress={handleToggleExplorer}
-                  tooltipLabel="Toggle explorer"
-                  tooltipKeys={["mod", "E"]}
-                  tooltipSide="left"
-                  style={styles.menuButton}
-                  accessible
-                  accessibilityRole="button"
-                  accessibilityLabel={isExplorerOpen ? "Close explorer" : "Open explorer"}
-                  accessibilityState={{ expanded: isExplorerOpen }}
-                >
-                  <PanelRight
-                    size={theme.iconSize.md}
-                    color={isExplorerOpen ? theme.colors.foreground : theme.colors.foregroundMuted}
-                  />
-                </HeaderToggleButton>
-              ) : null}
+              <View style={styles.menuToggleActions}>
+                <SidebarMenuToggle />
+                {!isMobile && canOpenExplorer ? (
+                  <HeaderToggleButton
+                    onPress={handleToggleExplorer}
+                    tooltipLabel="Toggle explorer"
+                    tooltipKeys={["mod", "E"]}
+                    tooltipSide="left"
+                    style={styles.menuButton}
+                    accessible
+                    accessibilityRole="button"
+                    accessibilityLabel={isExplorerOpen ? "Close explorer" : "Open explorer"}
+                    accessibilityState={{ expanded: isExplorerOpen }}
+                  >
+                    <PanelRight
+                      size={theme.iconSize.md}
+                      color={isExplorerOpen ? theme.colors.foreground : theme.colors.foregroundMuted}
+                    />
+                  </HeaderToggleButton>
+                ) : null}
+              </View>
             </View>
           </View>
 
@@ -1249,6 +1269,7 @@ function DraftAgentScreenContent({
               clearDraft={draftInput.clear}
               autoFocus={!isSubmitting}
               onAddImages={handleAddImagesCallback}
+              onResumeImported={handleResumeImportedSession}
               commandDraftConfig={draftCommandConfig}
               statusControls={{
                 providerDefinitions,
@@ -1334,6 +1355,10 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  menuToggleActions: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   menuButton: {
     marginLeft: theme.spacing[2],

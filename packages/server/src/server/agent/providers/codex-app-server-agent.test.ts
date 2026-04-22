@@ -4,6 +4,7 @@ import { existsSync, rmSync } from "node:fs";
 import type { AgentLaunchContext, AgentSession, AgentSessionConfig, AgentStreamEvent } from "../agent-sdk-types.js";
 import {
   __codexAppServerInternals,
+  CodexAppServerAgentClient,
   codexAppServerTurnInputFromPrompt,
 } from "./codex-app-server-agent.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
@@ -215,6 +216,34 @@ describe("Codex app-server provider", () => {
         },
       }),
     );
+  });
+
+  test("resumeSession defaults missing persisted modeId to auto", async () => {
+    const connectSpy = vi
+      .spyOn(__codexAppServerInternals.CodexAppServerAgentSession.prototype as any, "connect")
+      .mockResolvedValue(undefined);
+
+    try {
+      const client = new CodexAppServerAgentClient(logger);
+      const session = (await client.resumeSession({
+        sessionId: "persisted-thread-1",
+        metadata: {
+          provider: CODEX_PROVIDER,
+          cwd: "/tmp/codex-imported-thread",
+          title: "Imported thread",
+        },
+      })) as AgentSession & { [key: string]: unknown };
+
+      expect(session.config).toMatchObject({
+        provider: CODEX_PROVIDER,
+        cwd: "/tmp/codex-imported-thread",
+        modeId: "auto",
+        title: "Imported thread",
+      });
+      expect(session.currentMode).toBe("auto");
+    } finally {
+      connectSpy.mockRestore();
+    }
   });
 
   test("maps image prompt blocks to Codex localImage input", async () => {

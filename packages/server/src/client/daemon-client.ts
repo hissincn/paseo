@@ -14,6 +14,7 @@ import {
 import type {
   AgentStreamEventPayload,
   AgentSnapshotPayload,
+  ImportableSessionDescriptor,
   ProjectPlacementPayload,
   AgentPermissionResolvedMessage,
   CreateAgentRequestMessage,
@@ -365,12 +366,37 @@ type FetchAgentsPayload = Extract<
   SessionOutboundMessage,
   { type: "fetch_agents_response" }
 >["payload"];
+type ListImportableSessionsPayload = Extract<
+  SessionOutboundMessage,
+  { type: "list_importable_sessions_response" }
+>["payload"];
 type FetchAgentsRequest = Extract<SessionInboundMessage, { type: "fetch_agents_request" }>;
 export type FetchAgentsOptions = Omit<FetchAgentsRequest, "type" | "requestId"> & {
   requestId?: string;
 };
 export type FetchAgentsEntry = FetchAgentsPayload["entries"][number];
 export type FetchAgentsPageInfo = FetchAgentsPayload["pageInfo"];
+type ListImportableSessionsRequest = Extract<
+  SessionInboundMessage,
+  { type: "list_importable_sessions_request" }
+>;
+export type ListImportableSessionsOptions = Omit<
+  ListImportableSessionsRequest,
+  "type" | "requestId"
+> & {
+  requestId?: string;
+};
+type ImportImportableSessionRequest = Extract<
+  SessionInboundMessage,
+  { type: "import_importable_session_request" }
+>;
+export type ImportImportableSessionOptions = Omit<
+  ImportImportableSessionRequest,
+  "type" | "requestId"
+> & {
+  requestId?: string;
+};
+export type ImportableSessionEntry = ImportableSessionDescriptor;
 type FetchWorkspacesPayload = Extract<
   SessionOutboundMessage,
   { type: "fetch_workspaces_response" }
@@ -1406,6 +1432,64 @@ export class DaemonClient {
       return null;
     }
     return { agent: payload.agent, project: payload.project ?? null };
+  }
+
+  async listImportableSessions(
+    options?: ListImportableSessionsOptions,
+  ): Promise<ListImportableSessionsPayload> {
+    const resolvedRequestId = this.createRequestId(options?.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "list_importable_sessions_request",
+      requestId: resolvedRequestId,
+      ...(options?.provider ? { provider: options.provider } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
+    });
+    return this.sendRequest({
+      requestId: resolvedRequestId,
+      message,
+      timeout: 15000,
+      options: { skipQueue: true },
+      select: (msg) => {
+        if (msg.type !== "list_importable_sessions_response") {
+          return null;
+        }
+        if (msg.payload.requestId !== resolvedRequestId) {
+          return null;
+        }
+        return msg.payload;
+      },
+    });
+  }
+
+  async importImportableSession(
+    options: ImportImportableSessionOptions,
+  ): Promise<AgentSnapshotPayload> {
+    const resolvedRequestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "import_importable_session_request",
+      requestId: resolvedRequestId,
+      handle: options.handle,
+      ...(Object.prototype.hasOwnProperty.call(options, "title")
+        ? { title: options.title }
+        : {}),
+      ...(options.targetAgentId ? { targetAgentId: options.targetAgentId } : {}),
+    });
+    const payload = await this.sendRequest({
+      requestId: resolvedRequestId,
+      message,
+      timeout: 30000,
+      options: { skipQueue: true },
+      select: (msg) => {
+        if (msg.type !== "import_importable_session_response") {
+          return null;
+        }
+        if (msg.payload.requestId !== resolvedRequestId) {
+          return null;
+        }
+        return msg.payload;
+      },
+    });
+    return payload.agent;
   }
 
   private resubscribeCheckoutDiffSubscriptions(): void {

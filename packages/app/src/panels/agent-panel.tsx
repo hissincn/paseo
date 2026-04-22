@@ -43,6 +43,7 @@ import { buildDraftStoreKey } from "@/stores/draft-keys";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem } from "@/types/stream";
+import type { AgentSnapshotPayload } from "@server/shared/messages";
 import {
   deriveRouteBottomAnchorIntent,
   deriveRouteBottomAnchorRequest,
@@ -111,7 +112,8 @@ function useAgentPanelDescriptor(
 }
 
 function AgentPanel() {
-  const { serverId, target, isPaneFocused, openFileInWorkspace } = usePaneContext();
+  const { serverId, target, isPaneFocused, openFileInWorkspace, retargetCurrentTab } =
+    usePaneContext();
   invariant(target.kind === "agent", "AgentPanel requires agent target");
 
   function openWorkspaceFile(input: { filePath: string }) {
@@ -119,6 +121,12 @@ function AgentPanel() {
   }
 
   const handleOpenWorkspaceFile = useStableEvent(openWorkspaceFile);
+  const handleResumeImported = useStableEvent((agent: AgentSnapshotPayload) => {
+    if (agent.id === target.agentId) {
+      return;
+    }
+    retargetCurrentTab({ kind: "agent", agentId: agent.id });
+  });
 
   return (
     <AgentPanelContent
@@ -126,6 +134,7 @@ function AgentPanel() {
       agentId={target.agentId}
       isPaneFocused={isPaneFocused}
       onOpenWorkspaceFile={handleOpenWorkspaceFile}
+      onResumeImported={handleResumeImported}
     />
   );
 }
@@ -156,11 +165,13 @@ function AgentPanelContent({
   agentId,
   isPaneFocused,
   onOpenWorkspaceFile,
+  onResumeImported,
 }: {
   serverId: string;
   agentId: string;
   isPaneFocused: boolean;
   onOpenWorkspaceFile?: (input: { filePath: string }) => void;
+  onResumeImported?: (agent: AgentSnapshotPayload) => void;
 }) {
   const resolvedAgentId = agentId.trim() || undefined;
   const resolvedServerId = serverId.trim() || undefined;
@@ -203,6 +214,7 @@ function AgentPanelContent({
       isConnected={runtimeIsConnected}
       connectionStatus={connectionStatus}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
+      onResumeImported={onResumeImported}
     />
   );
 }
@@ -215,6 +227,7 @@ function AgentPanelBody({
   isConnected,
   connectionStatus,
   onOpenWorkspaceFile,
+  onResumeImported,
 }: {
   serverId: string;
   agentId?: string;
@@ -223,6 +236,7 @@ function AgentPanelBody({
   isConnected: boolean;
   connectionStatus: HostRuntimeConnectionStatus;
   onOpenWorkspaceFile?: (input: { filePath: string }) => void;
+  onResumeImported?: (agent: AgentSnapshotPayload) => void;
 }) {
   const { theme } = useUnistyles();
   const panelToast = useToastHost();
@@ -770,6 +784,7 @@ function AgentPanelBody({
               onAttentionInputFocus={attentionController.clearOnInputFocus}
               onAttentionPromptSend={attentionController.clearOnPromptSend}
               onAddImages={handleAddImagesCallback}
+              onResumeImported={onResumeImported}
               onComposerHeightChange={(height) => {
                 logWebStickyBottom("screen_composer_height_change", {
                   agentId,

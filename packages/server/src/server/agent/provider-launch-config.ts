@@ -33,7 +33,7 @@ export const ProviderCommandSchema = z.discriminatedUnion("mode", [
 export const ProviderRuntimeSettingsSchema = z
   .object({
     command: ProviderCommandSchema.optional(),
-    env: z.record(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 

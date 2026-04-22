@@ -50,6 +50,10 @@ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
 import { submitAgentInput } from "@/components/agent-input-submit";
 import { useAppSettings } from "@/hooks/use-settings";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import type { ImportableSessionEntry } from "@server/client/daemon-client";
+import type { AgentSnapshotPayload } from "@server/shared/messages";
+import { filterImportableSessionsForWorkspace } from "@/hooks/importable-sessions-utils";
 
 type QueuedMessage = {
   id: string;
@@ -86,6 +90,7 @@ interface AgentInputAreaProps {
   onComposerHeightChange?: (height: number) => void;
   onAttentionInputFocus?: () => void;
   onAttentionPromptSend?: () => void;
+  onResumeImported?: (agent: AgentSnapshotPayload) => Promise<void> | void;
   /** Controlled status controls rendered in input area (draft flows). */
   statusControls?: DraftAgentStatusBarProps;
 }
@@ -114,6 +119,7 @@ export function AgentInputArea({
   onComposerHeightChange,
   onAttentionInputFocus,
   onAttentionPromptSend,
+  onResumeImported,
   statusControls,
 }: AgentInputAreaProps) {
   markScrollInvestigationRender(`AgentInputArea:${serverId}:${agentId}`);
@@ -137,9 +143,20 @@ export function AgentInputArea({
 
   const agentState = useSessionStore(
     useShallow((state) => {
-      const agent = state.sessions[serverId]?.agents?.get(agentId) ?? null;
+      const session = state.sessions[serverId];
+      const agent = session?.agents?.get(agentId) ?? null;
+      const tailCount = session?.agentStreamTail.get(agentId)?.length ?? 0;
+      const headCount = session?.agentStreamHead.get(agentId)?.length ?? 0;
+      const timelineCursor = session?.agentTimelineCursor.get(agentId);
       return {
         status: agent?.status ?? null,
+        provider: agent?.provider ?? null,
+        cwd: agent?.cwd ?? "",
+        hasConversation:
+          tailCount > 0 ||
+          headCount > 0 ||
+          (timelineCursor?.endSeq ?? 0) > 0 ||
+          agent?.lastUserMessageAt != null,
         contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
         contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
       };
@@ -169,6 +186,7 @@ export function AgentInputArea({
   const [isCancellingAgent, setIsCancellingAgent] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false);
+  const [isResumingSessionId, setIsResumingSessionId] = useState<string | null>(null);
   const messageInputRef = useRef<MessageInputRef>(null);
   const keyboardHandlerIdRef = useRef(
     `message-input:${serverId}:${agentId}:${Math.random().toString(36).slice(2)}`,
@@ -369,7 +387,105 @@ export function AgentInputArea({
     });
   }
 
+  const executeResumeImport = useCallback(
+    async (entry: ImportableSessionEntry) => {
+      if (!client) {
+        throw new Error("Host is not connected");
+      }
+
+      setIsResumingSessionId(entry.sessionId);
+      try {
+        const targetAgentId =
+          !commandDraftConfig && !agentState.hasConversation ? agentId : undefined;
+        const agent = await client.importImportableSession({
+          handle: entry.persistence,
+          title: entry.title,
+          ...(targetAgentId ? { targetAgentId } : {}),
+        });
+        await getHostRuntimeStore().refreshAgentDirectory({ serverId });
+        await client
+          .fetchAgentTimeline(agent.id, {
+            direction: "tail",
+            limit: Platform.OS === "web" ? 0 : 200,
+            projection: "canonical",
+          })
+          .catch(() => undefined);
+        setUserInput("");
+        setSelectedImages([]);
+        clearDraft("abandoned");
+        toast.show(entry.title ? `Resumed ${entry.title}` : "Resumed session", {
+          variant: "success",
+        });
+        if (agent.id !== agentId || Boolean(commandDraftConfig)) {
+          await onResumeImported?.(agent);
+        }
+      } finally {
+        setIsResumingSessionId(null);
+      }
+    },
+    [
+      agentId,
+      agentState.hasConversation,
+      clearDraft,
+      client,
+      commandDraftConfig,
+      onResumeImported,
+      serverId,
+      setSelectedImages,
+      setUserInput,
+      toast,
+    ],
+  );
+
+  const handleResumeCommandSubmit = useCallback(
+    async (sessionId: string) => {
+      if (!client) {
+        toast.error("Host is not connected");
+        return;
+      }
+      const workspaceId = commandDraftConfig?.cwd ?? agentState.cwd;
+      if (!workspaceId.trim()) {
+        toast.error("Resume is only available for the current project");
+        return;
+      }
+
+      try {
+        const response = await client.listImportableSessions({
+          limit: 100,
+        });
+        const projectEntries = filterImportableSessionsForWorkspace(response.entries, workspaceId);
+        const trimmedSessionId = sessionId.trim();
+        const exactMatch = projectEntries.find((entry) => entry.sessionId === trimmedSessionId);
+        const prefixMatches = projectEntries.filter((entry) =>
+          entry.sessionId.startsWith(trimmedSessionId),
+        );
+        const match = exactMatch ?? (prefixMatches.length === 1 ? prefixMatches[0] : null);
+        if (!match) {
+          toast.error(
+            prefixMatches.length > 1
+              ? "Multiple resumable sessions match that id. Pick one from the list."
+              : "No resumable session found for this project.",
+          );
+          return;
+        }
+        await executeResumeImport(match);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to resume session");
+      }
+    },
+    [agentState.cwd, client, commandDraftConfig?.cwd, executeResumeImport, toast],
+  );
+
   function handleSubmit(payload: MessagePayload) {
+    const resumeCommand = parseResumeCommand(payload.text);
+    if (resumeCommand && (!payload.images || payload.images.length === 0)) {
+      if (resumeCommand.sessionId) {
+        void handleResumeCommandSubmit(resumeCommand.sessionId);
+      } else {
+        toast.error("Pick a session from the resume list above the composer.");
+      }
+      return;
+    }
     if (blurOnSubmit) {
       messageInputRef.current?.blur();
     }
@@ -764,6 +880,21 @@ export function AgentInputArea({
       </View>
     </Animated.View>
   );
+}
+
+function parseResumeCommand(text: string): { sessionId: string | null } | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/resume")) {
+    return null;
+  }
+  const match = trimmed.match(/^\/resume(?:\s+(.+))?$/);
+  if (!match) {
+    return null;
+  }
+  const sessionId = match[1]?.trim() ?? "";
+  return {
+    sessionId: sessionId.length > 0 ? sessionId : null,
+  };
 }
 
 const BUTTON_SIZE = 40;

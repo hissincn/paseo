@@ -489,7 +489,7 @@ describe("DaemonClient", () => {
     expect(request.message.type).toBe("subscribe_checkout_diff_request");
     expect(request.message.subscriptionId).toBe("checkout-sub-1");
     expect(request.message.cwd).toBe("/tmp/project");
-    expect(request.message.compare).toEqual({ mode: "uncommitted" });
+    expect(request.message.compare).toEqual({ mode: "uncommitted", ignoreWhitespace: false });
 
     mock.triggerMessage(
       JSON.stringify({
@@ -548,7 +548,11 @@ describe("DaemonClient", () => {
     };
     expect(subscribeRequest.message.type).toBe("subscribe_checkout_diff_request");
     expect(subscribeRequest.message.cwd).toBe("/tmp/project");
-    expect(subscribeRequest.message.compare).toEqual({ mode: "base", baseRef: "main" });
+    expect(subscribeRequest.message.compare).toEqual({
+      mode: "base",
+      baseRef: "main",
+      ignoreWhitespace: false,
+    });
 
     mock.triggerMessage(
       JSON.stringify({
@@ -856,7 +860,7 @@ describe("DaemonClient", () => {
     };
     internal.checkoutDiffSubscriptions.set("checkout-sub-1", {
       cwd: "/tmp/project",
-      compare: { mode: "base", baseRef: "main" },
+      compare: { mode: "base", baseRef: "main", ignoreWhitespace: false },
     });
 
     const connectPromise = client.connect();
@@ -877,7 +881,11 @@ describe("DaemonClient", () => {
     expect(request.message.type).toBe("subscribe_checkout_diff_request");
     expect(request.message.subscriptionId).toBe("checkout-sub-1");
     expect(request.message.cwd).toBe("/tmp/project");
-    expect(request.message.compare).toEqual({ mode: "base", baseRef: "main" });
+    expect(request.message.compare).toEqual({
+      mode: "base",
+      baseRef: "main",
+      ignoreWhitespace: false,
+    });
     expect(typeof request.message.requestId).toBe("string");
     expect(request.message.requestId.length).toBeGreaterThan(0);
   });
@@ -959,6 +967,200 @@ describe("DaemonClient", () => {
         nextCursor: null,
         prevCursor: "cursor-1",
         hasMore: false,
+      },
+    });
+  });
+
+  test("lists importable sessions via RPC", async () => {
+    const logger = createMockLogger();
+    const mock = createMockTransport();
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger,
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+
+    const connectPromise = client.connect();
+    mock.triggerOpen();
+    await connectPromise;
+
+    const promise = client.listImportableSessions({
+      provider: "codex",
+      limit: 10,
+    });
+
+    expect(mock.sent).toHaveLength(1);
+    const request = JSON.parse(mock.sent[0]) as {
+      type: "session";
+      message: {
+        type: "list_importable_sessions_request";
+        requestId: string;
+        provider?: string;
+        limit?: number;
+      };
+    };
+    expect(request.message).toMatchObject({
+      type: "list_importable_sessions_request",
+      provider: "codex",
+      limit: 10,
+    });
+
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "list_importable_sessions_response",
+        payload: {
+          requestId: request.message.requestId,
+          entries: [
+            {
+              provider: "codex",
+              sessionId: "thread-1",
+              cwd: "/tmp/project",
+              title: "Imported thread",
+              lastActivityAt: "2026-04-12T00:00:00.000Z",
+              persistence: {
+                provider: "codex",
+                sessionId: "thread-1",
+                nativeHandle: "thread-1",
+                metadata: {
+                  provider: "codex",
+                  cwd: "/tmp/project",
+                },
+              },
+              timeline: [{ type: "user_message", text: "hi" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(promise).resolves.toEqual({
+      requestId: request.message.requestId,
+      entries: [
+        {
+          provider: "codex",
+          sessionId: "thread-1",
+          cwd: "/tmp/project",
+          title: "Imported thread",
+          lastActivityAt: "2026-04-12T00:00:00.000Z",
+          persistence: {
+            provider: "codex",
+            sessionId: "thread-1",
+            nativeHandle: "thread-1",
+            metadata: {
+              provider: "codex",
+              cwd: "/tmp/project",
+            },
+          },
+          timeline: [{ type: "user_message", text: "hi" }],
+        },
+      ],
+    });
+  });
+
+  test("imports an importable session via RPC", async () => {
+    const logger = createMockLogger();
+    const mock = createMockTransport();
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_unit_test",
+      logger,
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+
+    const connectPromise = client.connect();
+    mock.triggerOpen();
+    await connectPromise;
+
+    const promise = client.importImportableSession({
+      handle: {
+        provider: "claude",
+        sessionId: "session-1",
+        nativeHandle: "session-1",
+        metadata: {
+          provider: "claude",
+          cwd: "/tmp/project",
+        },
+      },
+      title: "Recovered Claude Chat",
+    });
+
+    expect(mock.sent).toHaveLength(1);
+    const request = JSON.parse(mock.sent[0]) as {
+      type: "session";
+      message: {
+        type: "import_importable_session_request";
+        requestId: string;
+        handle: {
+          provider: string;
+          sessionId: string;
+          nativeHandle?: string;
+          metadata?: Record<string, unknown>;
+        };
+        title?: string | null;
+      };
+    };
+    expect(request.message).toMatchObject({
+      type: "import_importable_session_request",
+      title: "Recovered Claude Chat",
+      handle: {
+        provider: "claude",
+        sessionId: "session-1",
+        nativeHandle: "session-1",
+      },
+    });
+
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "import_importable_session_response",
+        payload: {
+          requestId: request.message.requestId,
+          agent: {
+            id: "agent-1",
+            provider: "claude",
+            cwd: "/tmp/project",
+            model: null,
+            createdAt: "2026-04-12T00:00:00.000Z",
+            updatedAt: "2026-04-12T00:00:00.000Z",
+            lastUserMessageAt: null,
+            status: "idle",
+            capabilities: {
+              supportsStreaming: true,
+              supportsSessionPersistence: true,
+              supportsDynamicModes: false,
+              supportsMcpServers: true,
+              supportsReasoningStream: true,
+              supportsToolInvocations: true,
+            },
+            currentModeId: null,
+            availableModes: [],
+            pendingPermissions: [],
+            persistence: request.message.handle,
+            runtimeInfo: {
+              provider: "claude",
+              sessionId: "session-1",
+            },
+            title: "Recovered Claude Chat",
+            labels: {},
+          },
+        },
+      }),
+    );
+
+    await expect(promise).resolves.toMatchObject({
+      id: "agent-1",
+      provider: "claude",
+      cwd: "/tmp/project",
+      title: "Recovered Claude Chat",
+      persistence: {
+        provider: "claude",
+        sessionId: "session-1",
       },
     });
   });

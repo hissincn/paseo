@@ -4037,6 +4037,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       ...overrides,
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
+      modeId: overrides?.modeId ?? storedConfig.modeId ?? DEFAULT_CODEX_MODE_ID,
     };
     const session = new CodexAppServerAgentSession(merged, handle, this.logger, () =>
       this.spawnAppServer(launchContext?.env),
@@ -4056,6 +4057,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       client.notify("initialized", {});
 
       const limit = options?.limit ?? 20;
+      const configuredDefaults = await readCodexConfiguredDefaults(client, this.logger);
       const response = (await client.request("thread/list", { limit })) as {
         data?: Array<any>;
       };
@@ -4105,6 +4107,11 @@ export class CodexAppServerAgentClient implements AgentClient {
               cwd,
               title,
               threadId,
+              modeId: DEFAULT_CODEX_MODE_ID,
+              ...(configuredDefaults.model ? { model: configuredDefaults.model } : {}),
+              ...(configuredDefaults.thinkingOptionId
+                ? { thinkingOptionId: configuredDefaults.thinkingOptionId }
+                : {}),
             },
           },
           timeline,
